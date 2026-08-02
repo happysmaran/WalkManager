@@ -281,36 +281,44 @@ class AudioConverter: ObservableObject {
     }
     
     private func convertToMP3(input: URL, output: URL, bitrate: String) {
-        let process = Process()
-        let fm = FileManager.default
-        
-        var ffmpegPath = "/opt/homebrew/bin/ffmpeg"
-        if !fm.fileExists(atPath: ffmpegPath) {
-            ffmpegPath = "/usr/local/bin/ffmpeg"
+            let process = Process()
+            let fm = FileManager.default
+            
+            var ffmpegPath = "/opt/homebrew/bin/ffmpeg"
+            if !fm.fileExists(atPath: ffmpegPath) {
+                ffmpegPath = "/usr/local/bin/ffmpeg"
+            }
+            
+            if !fm.fileExists(atPath: ffmpegPath) {
+                print("ERROR: FFmpeg not found at \(ffmpegPath).")
+                return
+            }
+            
+            process.executableURL = URL(fileURLWithPath: ffmpegPath)
+            
+            process.arguments = [
+                "-y",
+                "-i", input.path,
+                
+                "-map_metadata", "0",
+                
+                "-codec:a", "libmp3lame",
+                "-b:a", "\(bitrate)k",
+                
+                "-write_id3v1", "1",
+                
+                "-id3v2_version", "3",
+                
+                output.path
+            ]
+            
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                print("Failed to run FFmpeg: \(error.localizedDescription)")
+            }
         }
-        
-        if !fm.fileExists(atPath: ffmpegPath) {
-            print("ERROR: FFmpeg not found at \(ffmpegPath).")
-            return
-        }
-        
-        process.executableURL = URL(fileURLWithPath: ffmpegPath)
-        
-        process.arguments = [
-            "-y",
-            "-i", input.path,
-            "-codec:a", "libmp3lame",
-            "-b:a", "\(bitrate)k",
-            output.path
-        ]
-        
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            print("Failed to run FFmpeg: \(error.localizedDescription)")
-        }
-    }
     
     private func updateUI(_ block: @escaping () -> Void) {
         DispatchQueue.main.async {
