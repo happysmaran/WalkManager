@@ -171,20 +171,21 @@ struct DeviceDetailView: View {
 
                 // MARK: Sync settings
                 GroupBox("Sync Settings") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
+                    Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 14) {
+                        GridRow {
                             Label("Music Folder", systemImage: "folder")
-                            Spacer()
-                            Text(sourceFolder?.path ?? "Not selected")
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Button("Choose...", action: onPickFolderManually)
+                                .gridColumnAlignment(.leading)
+                            HStack(spacing: 8) {
+                                Text(sourceFolder?.path ?? "Not selected")
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Button("Choose...", action: onPickFolderManually)
+                            }
                         }
 
-                        HStack {
+                        GridRow {
                             Label("Destination on Device", systemImage: "arrow.down.doc")
-                            Spacer()
                             Picker("", selection: Binding(
                                 get: { device.selectedMusicFolder },
                                 set: { device.selectedMusicFolder = $0 }
@@ -194,17 +195,17 @@ struct DeviceDetailView: View {
                                     Text(folder).tag(folder)
                                 }
                             }
-                            .frame(width: 220)
+                            .pickerStyle(.menu)
+                            .labelsHidden()
                         }
 
-                        HStack {
+                        GridRow {
                             Label("MP3 Export Quality", systemImage: "waveform")
-                            Spacer()
                             Picker("", selection: $selectedBitrate) {
                                 ForEach(bitrates, id: \.self) { Text("\($0) kbps").tag($0) }
                             }
-                            .pickerStyle(SegmentedPickerStyle())
-                            .frame(width: 220)
+                            .pickerStyle(.menu)
+                            .labelsHidden()
                         }
                     }
                     .padding(6)
