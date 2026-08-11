@@ -46,9 +46,11 @@ struct ContentView: View {
             .onChange(of: deviceManager.devices) { _, newDevices in
                 if selectedDeviceID == nil {
                     selectedDeviceID = newDevices.first?.id
+                    if let first = newDevices.first { loadSettings(for: first) }
                 }
                 if let current = selectedDeviceID, !newDevices.contains(where: { $0.id == current }) {
                     selectedDeviceID = newDevices.first?.id
+                    if let first = newDevices.first { loadSettings(for: first) }
                 }
             }
         } detail: {
@@ -69,7 +71,11 @@ struct ContentView: View {
                     onPickFolderManually: {
                         if let picked = selectFolder() {
                             sourceFolder = picked
+                            saveSettings(for: device)
                         }
+                    },
+                    onMusicSubfolderChanged: {
+                        saveSettings(for: device)
                     }
                 )
                 .id(device.id) // refresh song list etc. when switching devices
@@ -78,6 +84,16 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 520)
+        .onChange(of: selectedDeviceID) { _, _ in
+            if let device = selectedDevice {
+                loadSettings(for: device)
+            }
+        }
+        .onChange(of: selectedBitrate) { _, _ in
+            if let device = selectedDevice {
+                saveSettings(for: device)
+            }
+        }
     }
 
     func selectFolder() -> URL? {
@@ -87,6 +103,30 @@ struct ContentView: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Select"
         return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    /// Applies any remembered bitrate / destination subfolder / source folder
+    /// for this device. Only overrides the source folder if the user hasn't
+    /// already picked one this session, so we never silently yank a folder
+    /// out from under an in-progress choice.
+    private func loadSettings(for device: ConnectedDevice) {
+        guard let saved = DeviceSettingsStore.shared.settings(for: device.identityKey) else { return }
+        selectedBitrate = saved.bitrate
+        if device.candidateMusicFolders.contains(saved.musicSubfolder) || saved.musicSubfolder.isEmpty {
+            device.selectedMusicFolder = saved.musicSubfolder
+        }
+        if sourceFolder == nil, let resolved = DeviceSettingsStore.shared.resolveSourceFolder(for: device.identityKey) {
+            sourceFolder = resolved
+        }
+    }
+
+    private func saveSettings(for device: ConnectedDevice) {
+        DeviceSettingsStore.shared.save(
+            bitrate: selectedBitrate,
+            musicSubfolder: device.selectedMusicFolder,
+            sourceFolder: sourceFolder,
+            for: device.identityKey
+        )
     }
 }
 
@@ -122,9 +162,12 @@ struct DeviceDetailView: View {
     let bitrates: [String]
     let onConvert: () -> Void
     let onPickFolderManually: () -> Void
+    let onMusicSubfolderChanged: () -> Void
 
     @State private var existingTracks: [AudioTrackInfo] = []
     @State private var isScanningTracks = false
+    @State private var isOptionHeld = false
+    @State private var flagsMonitor: Any?
 
     var body: some View {
         ScrollView {
@@ -188,7 +231,7 @@ struct DeviceDetailView: View {
                             Spacer()
                             Picker("", selection: Binding(
                                 get: { device.selectedMusicFolder },
-                                set: { device.selectedMusicFolder = $0 }
+                                set: { device.selectedMusicFolder = $0; onMusicSubfolderChanged() }
                             )) {
                                 Text("Device Root").tag("")
                                 ForEach(device.candidateMusicFolders, id: \.self) { folder in
@@ -224,17 +267,24 @@ struct DeviceDetailView: View {
                             .foregroundColor(.secondary)
                     } else {
                         Button(action: onConvert) {
-                            Label("Convert & Transfer to \(device.displayName)", systemImage: "play.circle.fill")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
+                            Label(
+                                isOptionHeld ? "Overwrite & Transfer to \(device.displayName)" : "Convert & Transfer to \(device.displayName)",
+                                systemImage: isOptionHeld ? "arrow.triangle.2.circlepath.circle.fill" : "play.circle.fill"
+                            )
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(isOptionHeld ? .orange : .accentColor)
                         .controlSize(.large)
                         .disabled(sourceFolder == nil)
+                        .animation(.easeInOut(duration: 0.12), value: isOptionHeld)
 
-                        Text("Adds new songs only, and never touches existing files on the device. Hold ⌥ Option while clicking to overwrite (delete + re-write) any songs already there.")
+                        Text(isOptionHeld
+                             ? "Release to add new songs only. Overwrite mode will delete and re-write any songs already on the device."
+                             : "Adds new songs only, and never touches existing files on the device. Hold ⌥ Option while clicking to overwrite (delete + re-write) any songs already there.")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(isOptionHeld ? .orange : .secondary)
                             .multilineTextAlignment(.center)
                     }
                 }
@@ -275,7 +325,19 @@ struct DeviceDetailView: View {
             }
             .padding(24)
         }
-        .onAppear { scanExistingTracks() }
+        .onAppear {
+            scanExistingTracks()
+            flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                isOptionHeld = event.modifierFlags.contains(.option)
+                return event
+            }
+        }
+        .onDisappear {
+            if let monitor = flagsMonitor {
+                NSEvent.removeMonitor(monitor)
+                flagsMonitor = nil
+            }
+        }
         .onChange(of: converter.isConverting) { _, converting in
             if converting == false {
                 scanExistingTracks()
@@ -490,6 +552,18 @@ final class ConnectedDevice: ObservableObject, Identifiable, Equatable {
         selectedMusicFolder.isEmpty ? mountURL : mountURL.appendingPathComponent(selectedMusicFolder)
     }
 
+    /// A stable-ish identity for persisting per-device settings. The BSD name
+    /// (`id`) can change across reconnects/reboots, so instead we key off
+    /// whatever the device itself reports (vendor + model + volume name).
+    /// Not perfectly unique (two identical drives with the same volume name
+    /// would collide), but it's the best signal macOS gives us for generic
+    /// USB mass storage, consistent with the detection limits discussed
+    /// earlier. I love Unix.
+    var identityKey: String {
+        let parts = [vendor, model, volumeName].compactMap { $0 }.joined(separator: "|")
+        return parts.isEmpty ? "unknown-device" : parts.lowercased()
+    }
+
     /// Re-reads live capacity from the volume, used after deleting or
     /// transferring individual files so the storage bar stays accurate
     /// without waiting for the next full device rescan.
@@ -516,6 +590,66 @@ final class ConnectedDevice: ObservableObject, Identifiable, Equatable {
         lhs.volumeName == rhs.volumeName &&
         lhs.totalCapacity == rhs.totalCapacity &&
         lhs.availableCapacity == rhs.availableCapacity
+    }
+}
+
+// MARK: - Persisted per-device settings
+//
+// Remembers, per device, the last-used MP3 bitrate, destination subfolder,
+// and source music folder.
+
+struct DeviceSyncSettings: Codable {
+    var bitrate: String
+    var musicSubfolder: String
+    var sourceFolderBookmark: Data?
+}
+
+final class DeviceSettingsStore {
+    static let shared = DeviceSettingsStore()
+
+    private let defaultsKey = "WalkManager.DeviceSyncSettings"
+    private var cache: [String: DeviceSyncSettings]
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let decoded = try? JSONDecoder().decode([String: DeviceSyncSettings].self, from: data) {
+            cache = decoded
+        } else {
+            cache = [:]
+        }
+    }
+
+    func settings(for identityKey: String) -> DeviceSyncSettings? {
+        cache[identityKey]
+    }
+
+    func save(bitrate: String, musicSubfolder: String, sourceFolder: URL?, for identityKey: String) {
+        var bookmark: Data?
+        if let sourceFolder {
+            bookmark = try? sourceFolder.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+        }
+        cache[identityKey] = DeviceSyncSettings(bitrate: bitrate, musicSubfolder: musicSubfolder, sourceFolderBookmark: bookmark)
+        persist()
+    }
+
+    /// Resolves a stored bookmark back into a usable URL. Starts the
+    /// security-scoped access; callers should call `stopAccessingSecurityScopedResource()`
+    /// on the returned URL when they're done with it for this session (WalkManager
+    /// keeps access open for the lifetime of the selection, matching the
+    /// existing NSOpenPanel-driven folder picker behavior).
+    func resolveSourceFolder(for identityKey: String) -> URL? {
+        guard let bookmark = cache[identityKey]?.sourceFolderBookmark else { return nil }
+        var isStale = false
+        guard let url = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+            return nil
+        }
+        _ = url.startAccessingSecurityScopedResource()
+        return url
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(cache) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
     }
 }
 
