@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B1B04D1B302B3E8600653E03 /* DiskArbitration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B1B04D1A302B3E8600653E03 /* DiskArbitration.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		B1ACE434301F2A5400A05014 /* WalkManager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WalkManager.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1B04D1A302B3E8600653E03 /* DiskArbitration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = DiskArbitration.framework; path = System/Library/Frameworks/DiskArbitration.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -23,6 +28,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B1B04D1B302B3E8600653E03 /* DiskArbitration.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -33,6 +39,7 @@
 			isa = PBXGroup;
 			children = (
 				B1ACE436301F2A5400A05014 /* WalkManager */,
+				B1B04D19302B3E8600653E03 /* Frameworks */,
 				B1ACE435301F2A5400A05014 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +50,14 @@
 				B1ACE434301F2A5400A05014 /* WalkManager.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B1B04D19302B3E8600653E03 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B1B04D1A302B3E8600653E03 /* DiskArbitration.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -263,6 +278,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.smaran.WalkManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -294,6 +310,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.smaran.WalkManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";

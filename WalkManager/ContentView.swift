@@ -3,230 +3,589 @@ import UniformTypeIdentifiers
 import Combine
 import Foundation
 import AVFoundation
+import DiskArbitration
+import AppKit
+
+// MARK: - Root View
 
 struct ContentView: View {
     @StateObject private var converter = AudioConverter()
-    
+    @StateObject private var deviceManager = DeviceManager()
+
     @State private var sourceFolder: URL?
-    @State private var destFolder: URL?
     @State private var selectedBitrate: String = "320"
-    
+    @State private var selectedDeviceID: String?
+
     let bitrates = ["128", "192", "256", "320"]
-    
+
+    var selectedDevice: ConnectedDevice? {
+        deviceManager.devices.first { $0.id == selectedDeviceID }
+    }
+
     var body: some View {
-        VStack(spacing: 24) {
-            
-            // MARK: - Header
-            VStack(spacing: 8) {
-                Text("WalkManager")
-                    .font(.title)
-                    .fontWeight(.semibold)
-                
-                Text("Batch convert and transfer audio to your USB mp3 device")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.top, 10)
-            
-            // MARK: - Folder Selection Cards
-            HStack(spacing: 20) {
-                FolderCard(
-                    title: "Music Library",
-                    subtitle: "Source Folder",
-                    icon: "folder.fill",
-                    url: sourceFolder,
-                    tint: .blue
-                ) {
-                    sourceFolder = selectFolder()
-                }
-                
-                Image(systemName: "arrow.right")
-                    .font(.title2)
-                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
-                
-                FolderCard(
-                    title: "mp3 player",
-                    subtitle: "Destination",
-                    icon: "externaldrive.fill",
-                    url: destFolder,
-                    tint: .green
-                ) {
-                    destFolder = selectFolder()
-                }
-            }
-            
-            // MARK: - Settings
-            GroupBox {
-                HStack {
-                    Label("MP3 Export Quality", systemImage: "waveform")
-                        .foregroundColor(.secondary)
-                    
-                    Spacer()
-                    
-                    Picker("", selection: $selectedBitrate) {
-                        ForEach(bitrates, id: \.self) { bitrate in
-                            Text("\(bitrate) kbps").tag(bitrate)
-                        }
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .frame(width: 200)
-                }
-                .padding(4)
-            }
-            
-            Spacer()
-            
-            // MARK: - Progress & Action
-            VStack(spacing: 12) {
-                if converter.isConverting {
-                    VStack(spacing: 8) {
-                        ProgressView(value: converter.progress)
-                            .progressViewStyle(LinearProgressViewStyle())
-                            .tint(.blue)
-                        
-                        Text(converter.statusMessage)
+        NavigationSplitView {
+            // MARK: Sidebar - "Devices" (iTunes left pane)
+            List(selection: $selectedDeviceID) {
+                Section("Devices") {
+                    if deviceManager.devices.isEmpty {
+                        Text("No USB devices connected")
                             .font(.callout)
                             .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-                } else {
-                    Button(action: {
-                        if let src = sourceFolder, let dst = destFolder {
-                            converter.startConversion(source: src, destination: dst, bitrate: selectedBitrate)
+                            .padding(.vertical, 4)
+                    } else {
+                        ForEach(deviceManager.devices) { device in
+                            Label(device.displayName, systemImage: device.iconName)
+                                .tag(device.id)
                         }
-                    }) {
-                        Label("Convert & Transfer", systemImage: "play.circle.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(sourceFolder == nil || destFolder == nil)
-                    .transition(.opacity)
+                }
+
+                Section("Library") {
+                    Button {
+                        if let picked = selectFolder() {
+                            sourceFolder = picked
+                        }
+                    } label: {
+                        Label(sourceFolder?.lastPathComponent ?? "Choose Music Folder", systemImage: "music.note.folder")
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .animation(.easeInOut, value: converter.isConverting)
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+            .onAppear { deviceManager.startMonitoring() }
+            .onChange(of: deviceManager.devices) { _, newDevices in
+                if selectedDeviceID == nil {
+                    selectedDeviceID = newDevices.first?.id
+                }
+                if let current = selectedDeviceID, !newDevices.contains(where: { $0.id == current }) {
+                    selectedDeviceID = newDevices.first?.id
+                }
+            }
+        } detail: {
+            // MARK: Detail - device summary panel
+            if let device = selectedDevice {
+                DeviceDetailView(
+                    device: device,
+                    converter: converter,
+                    sourceFolder: sourceFolder,
+                    selectedBitrate: $selectedBitrate,
+                    bitrates: bitrates,
+                    onConvert: {
+                        if let src = sourceFolder {
+                            converter.startConversion(source: src, destination: device.mountURL, bitrate: selectedBitrate)
+                        }
+                    },
+                    onPickFolderManually: {
+                        if let picked = selectFolder() {
+                            sourceFolder = picked
+                        }
+                    }
+                )
+                .id(device.id) // refresh song list etc. when switching devices
+            } else {
+                EmptyStateView()
+            }
         }
-        .padding(30)
-        .frame(width: 550, height: 480)
-        // Prevents the window from being resized too small
-        .frame(minWidth: 500, minHeight: 450)
+        .frame(minWidth: 760, minHeight: 520)
     }
-    
-    // macOS Open Panel for Folder Selection
+
     func selectFolder() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        
-        if panel.runModal() == .OK {
-            return panel.url
-        }
-        return nil
+        panel.prompt = "Select"
+        return panel.runModal() == .OK ? panel.url : nil
     }
 }
 
-// MARK: - Reusable UI Components
-struct FolderCard: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-    let url: URL?
-    let tint: Color
-    let action: () -> Void
-    
+// MARK: - Empty State
+
+struct EmptyStateView: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.title2)
-                    .foregroundColor(tint)
-                Text(subtitle)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
-                    .textCase(.uppercase)
-                Spacer()
-            }
-            
-            Text(url?.lastPathComponent ?? "Select \(title)")
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            
-            Button(action: action) {
-                Text("Browse...")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
+        VStack(spacing: 12) {
+            Image(systemName: "iphone.slash")
+                .font(.system(size: 42))
+                .foregroundColor(.secondary)
+            Text("No Device Selected")
+                .font(.title3)
+                .fontWeight(.medium)
+            Text("Plug in a USB mass-storage device and select it in the sidebar.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
         }
-        .padding(16)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-        )
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-// MARK: - Converter Logic
+// MARK: - Device Detail (iTunes-style summary)
+
+struct DeviceDetailView: View {
+    @ObservedObject var device: ConnectedDevice
+    @ObservedObject var converter: AudioConverter
+
+    let sourceFolder: URL?
+    @Binding var selectedBitrate: String
+    let bitrates: [String]
+    let onConvert: () -> Void
+    let onPickFolderManually: () -> Void
+
+    @State private var existingTracks: [AudioTrackInfo] = []
+    @State private var isScanningTracks = false
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+
+                // MARK: Device header card
+                HStack(alignment: .top, spacing: 16) {
+                    Image(systemName: device.iconName)
+                        .font(.system(size: 40))
+                        .foregroundColor(.accentColor)
+                        .frame(width: 64, height: 64)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(device.displayName)
+                            .font(.title2)
+                            .fontWeight(.semibold)
+
+                        if let vendor = device.vendor, let model = device.model {
+                            Text("\(vendor) \(model)")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("USB Mass Storage Device")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Text("Detected as a removable volume. Vendor/model information is reported by the device itself and may be generic.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                }
+                .padding()
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                // MARK: Storage bar
+                StorageBarView(device: device)
+
+                Divider()
+
+                // MARK: Sync settings
+                GroupBox("Sync Settings") {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Label("Music Folder", systemImage: "folder")
+                            Spacer()
+                            Text(sourceFolder?.path ?? "Not selected")
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("Choose...", action: onPickFolderManually)
+                        }
+
+                        HStack {
+                            Label("MP3 Export Quality", systemImage: "waveform")
+                            Spacer()
+                            Picker("", selection: $selectedBitrate) {
+                                ForEach(bitrates, id: \.self) { Text("\($0) kbps").tag($0) }
+                            }
+                            .pickerStyle(SegmentedPickerStyle())
+                            .frame(width: 220)
+                        }
+                    }
+                    .padding(6)
+                }
+
+                // MARK: Convert / Progress
+                VStack(spacing: 10) {
+                    if converter.isConverting {
+                        ProgressView(value: converter.progress)
+                            .tint(.accentColor)
+                        Text(converter.statusMessage)
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Button(action: onConvert) {
+                            Label("Convert & Transfer to \(device.displayName)", systemImage: "play.circle.fill")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(sourceFolder == nil)
+                    }
+                }
+                .animation(.easeInOut, value: converter.isConverting)
+
+                Divider()
+
+                // MARK: On-device song list
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Songs on Device")
+                            .font(.headline)
+                        Spacer()
+                        if isScanningTracks {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("\(existingTracks.count) tracks")
+                                .foregroundColor(.secondary)
+                        }
+                        Button {
+                            scanExistingTracks()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if existingTracks.isEmpty && !isScanningTracks {
+                        Text("No audio files found on this device yet.")
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 8)
+                    } else {
+                        TrackTableView(tracks: existingTracks)
+                            .frame(minHeight: 220)
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .onAppear { scanExistingTracks() }
+        .onChange(of: converter.isConverting) { _, converting in
+            if converting == false { scanExistingTracks() }
+        }
+    }
+
+    private func scanExistingTracks() {
+        isScanningTracks = true
+        let mountURL = device.mountURL
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fm = FileManager.default
+            var results: [AudioTrackInfo] = []
+            if let enumerator = fm.enumerator(at: mountURL, includingPropertiesForKeys: [.fileSizeKey]) {
+                for case let fileURL as URL in enumerator {
+                    guard fileURL.pathExtension.lowercased() == "mp3" else { continue }
+                    let asset = AVURLAsset(url: fileURL)
+                    let duration = CMTimeGetSeconds(asset.duration)
+                    let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                    results.append(
+                        AudioTrackInfo(
+                            id: fileURL.path,
+                            title: fileURL.deletingPathExtension().lastPathComponent,
+                            durationSeconds: duration.isFinite ? duration : 0,
+                            fileSizeBytes: size
+                        )
+                    )
+                }
+            }
+            results.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            DispatchQueue.main.async {
+                self.existingTracks = results
+                self.isScanningTracks = false
+            }
+        }
+    }
+}
+
+// MARK: - Storage Bar (iTunes-style capacity breakdown)
+
+struct StorageBarView: View {
+    @ObservedObject var device: ConnectedDevice
+
+    var usedFraction: Double {
+        guard device.totalCapacity > 0 else { return 0 }
+        return Double(device.usedCapacity) / Double(device.totalCapacity)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GeometryReader { geo in
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(NSColor.separatorColor).opacity(0.3))
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.accentColor)
+                            .frame(width: max(4, geo.size.width * usedFraction))
+                    }
+            }
+            .frame(height: 18)
+
+            HStack {
+                Label(byteString(device.usedCapacity) + " used", systemImage: "circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.accentColor)
+                Spacer()
+                Label(byteString(device.availableCapacity) + " free", systemImage: "circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(byteString(device.totalCapacity) + " capacity")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func byteString(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}
+
+// MARK: - Track table
+
+struct TrackTableView: View {
+    let tracks: [AudioTrackInfo]
+
+    var body: some View {
+        Table(tracks) {
+            TableColumn("Title") { track in
+                Text(track.title)
+            }
+            TableColumn("Duration") { track in
+                Text(track.durationDisplay)
+                    .foregroundColor(.secondary)
+            }
+            .width(80)
+            TableColumn("Size") { track in
+                Text(track.sizeDisplay)
+                    .foregroundColor(.secondary)
+            }
+            .width(90)
+        }
+    }
+}
+
+struct AudioTrackInfo: Identifiable {
+    let id: String
+    let title: String
+    let durationSeconds: Double
+    let fileSizeBytes: Int
+
+    var durationDisplay: String {
+        let total = Int(durationSeconds)
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    var sizeDisplay: String {
+        ByteCountFormatter.string(fromByteCount: Int64(fileSizeBytes), countStyle: .file)
+    }
+}
+
+// MARK: - Connected device model
+
+final class ConnectedDevice: ObservableObject, Identifiable, Equatable {
+    let id: String                 // BSD name, e.g. "disk4s1"
+    let mountURL: URL
+    @Published var volumeName: String
+    @Published var vendor: String?
+    @Published var model: String?
+    @Published var totalCapacity: Int64
+    @Published var availableCapacity: Int64
+    @Published var isRemovable: Bool
+
+    init(id: String, mountURL: URL, volumeName: String, vendor: String?, model: String?,
+         totalCapacity: Int64, availableCapacity: Int64, isRemovable: Bool) {
+        self.id = id
+        self.mountURL = mountURL
+        self.volumeName = volumeName
+        self.vendor = vendor
+        self.model = model
+        self.totalCapacity = totalCapacity
+        self.availableCapacity = availableCapacity
+        self.isRemovable = isRemovable
+    }
+
+    var usedCapacity: Int64 { max(0, totalCapacity - availableCapacity) }
+
+    var displayName: String {
+        volumeName.isEmpty ? (vendor ?? "USB Device") : volumeName
+    }
+
+    /// NOTE: macOS cannot positively identify a device as an "MP3 player" vs. a plain
+    /// USB flash drive -- both present as generic USB Mass Storage volumes. This icon
+    /// is only a best-effort guess based on the vendor/model strings the device reports.
+    var iconName: String {
+        let haystack = ((vendor ?? "") + " " + (model ?? "") + " " + volumeName).lowercased()
+        let playerHints = ["walkman", "mp3", "player", "sansa", "clip", "nano", "ipod"]
+        if playerHints.contains(where: { haystack.contains($0) }) {
+            return "ipod"
+        }
+        return "externaldrive.fill"
+    }
+
+    static func == (lhs: ConnectedDevice, rhs: ConnectedDevice) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.volumeName == rhs.volumeName &&
+        lhs.totalCapacity == rhs.totalCapacity &&
+        lhs.availableCapacity == rhs.availableCapacity
+    }
+}
+
+// MARK: - Device Manager
+//
+// Uses DiskArbitration to enumerate mounted, removable, ejectable volumes and
+// pull whatever vendor/model metadata the device itself reports.
+
+final class DeviceManager: NSObject, ObservableObject {
+    @Published var devices: [ConnectedDevice] = []
+
+    private var session: DASession?
+    private let notificationCenter = NotificationCenter.default
+
+    func startMonitoring() {
+        guard session == nil else { return }
+
+        guard let session = DASessionCreate(kCFAllocatorDefault) else { return }
+        self.session = session
+        DASessionSetDispatchQueue(session, DispatchQueue.main)
+
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        DARegisterDiskAppearedCallback(session, nil, { disk, context in
+            let manager = Unmanaged<DeviceManager>.fromOpaque(context!).takeUnretainedValue()
+            manager.refreshDevices()
+        }, selfPtr)
+
+        DARegisterDiskDisappearedCallback(session, nil, { disk, context in
+            let manager = Unmanaged<DeviceManager>.fromOpaque(context!).takeUnretainedValue()
+            manager.refreshDevices()
+        }, selfPtr)
+
+        DARegisterDiskDescriptionChangedCallback(session, nil, nil, { disk, keys, context in
+            let manager = Unmanaged<DeviceManager>.fromOpaque(context!).takeUnretainedValue()
+            manager.refreshDevices()
+        }, selfPtr)
+
+        refreshDevices()
+    }
+
+    func refreshDevices() {
+        let fm = FileManager.default
+        guard let mountedVolumeURLs = fm.mountedVolumeURLs(
+            includingResourceValuesForKeys: [.volumeIsRemovableKey, .volumeIsEjectableKey, .volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityKey],
+            options: [.skipHiddenVolumes]
+        ) else {
+            self.devices = []
+            return
+        }
+
+        guard let session = session else { return }
+
+        var results: [ConnectedDevice] = []
+
+        for volumeURL in mountedVolumeURLs {
+            guard let values = try? volumeURL.resourceValues(forKeys: [
+                .volumeIsRemovableKey, .volumeIsEjectableKey, .volumeNameKey,
+                .volumeTotalCapacityKey, .volumeAvailableCapacityKey
+            ]) else { continue }
+
+            let isRemovable = values.volumeIsRemovable ?? false
+            let isEjectable = values.volumeIsEjectable ?? false
+            // Only show devices that look like external USB media, not the boot volume.
+            guard isRemovable || isEjectable else { continue }
+
+            let volumeName = values.volumeName ?? volumeURL.lastPathComponent
+            let total = Int64(values.volumeTotalCapacity ?? 0)
+            let available = Int64(values.volumeAvailableCapacity ?? 0)
+
+            var vendor: String?
+            var model: String?
+            var bsdName = volumeURL.path
+
+            if let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, volumeURL as CFURL),
+               let descCF = DADiskCopyDescription(disk) {
+                let desc = descCF as NSDictionary
+                vendor = (desc[kDADiskDescriptionDeviceVendorKey as String] as? String)?
+                    .trimmingCharacters(in: .whitespaces)
+                model = (desc[kDADiskDescriptionDeviceModelKey as String] as? String)?
+                    .trimmingCharacters(in: .whitespaces)
+                if let name = DADiskGetBSDName(disk) {
+                    bsdName = String(cString: name)
+                }
+            }
+
+            results.append(
+                ConnectedDevice(
+                    id: bsdName,
+                    mountURL: volumeURL,
+                    volumeName: volumeName,
+                    vendor: (vendor?.isEmpty ?? true) ? nil : vendor,
+                    model: (model?.isEmpty ?? true) ? nil : model,
+                    totalCapacity: total,
+                    availableCapacity: available,
+                    isRemovable: isRemovable
+                )
+            )
+        }
+
+        self.devices = results.sorted { $0.displayName < $1.displayName }
+    }
+}
+
+// MARK: - Converter Logic (unchanged conversion behavior, destination now = selected device mount)
+
 class AudioConverter: ObservableObject {
     @Published var isConverting = false
     @Published var progress: Double = 0.0
     @Published var statusMessage = ""
-    
+
     let supportedExtensions = ["wav", "flac", "m4a", "aac", "aiff", "ogg", "alac", "mp3", "wma"]
-    
+
     func startConversion(source: URL, destination: URL, bitrate: String) {
         isConverting = true
         progress = 0.0
         statusMessage = "Scanning for audio files..."
-        
+
         DispatchQueue.global(qos: .userInitiated).async {
             let fileManager = FileManager.default
-            
+
             guard let enumerator = fileManager.enumerator(at: source, includingPropertiesForKeys: nil) else {
                 self.updateUI { self.statusMessage = "Failed to read source folder."; self.isConverting = false }
                 return
             }
-            
+
             var audioFiles: [URL] = []
-            
+
             for case let fileURL as URL in enumerator {
                 if self.supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
                     audioFiles.append(fileURL)
                 }
             }
-            
+
             let totalFiles = audioFiles.count
             if totalFiles == 0 {
                 self.updateUI { self.statusMessage = "No supported audio files found."; self.isConverting = false }
                 return
             }
-            
+
             let targetKbps = Double(bitrate) ?? 320.0
-            
-            // Set up a multi-threading queue
+
             let queue = OperationQueue()
-            // Launch as many parallel conversions as you have CPU cores
             queue.maxConcurrentOperationCount = ProcessInfo.processInfo.processorCount
-            
+
             var completedCount = 0
-            
+
             for file in audioFiles {
                 queue.addOperation {
                     let fileExtension = file.pathExtension.lowercased()
                     let filenameWithoutExtension = file.deletingPathExtension().lastPathComponent
                     let outputURL = destination.appendingPathComponent("\(filenameWithoutExtension).mp3")
-                    
+
                     if fileExtension == "mp3" {
                         let currentKbps = self.estimateBitrate(for: file)
-                        
+
                         if currentKbps > (targetKbps + 15.0) {
                             self.convertToMP3(input: file, output: outputURL, bitrate: bitrate)
                         } else {
@@ -242,8 +601,7 @@ class AudioConverter: ObservableObject {
                     } else {
                         self.convertToMP3(input: file, output: outputURL, bitrate: bitrate)
                     }
-                    
-                    // Update progress safely on the main thread
+
                     DispatchQueue.main.async {
                         completedCount += 1
                         self.progress = Double(completedCount) / Double(totalFiles)
@@ -251,10 +609,9 @@ class AudioConverter: ObservableObject {
                     }
                 }
             }
-            
-            // Wait for all the parallel background tasks to finish
+
             queue.waitUntilAllOperationsAreFinished()
-            
+
             self.updateUI {
                 self.statusMessage = "Done! Successfully transferred \(totalFiles) files."
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
@@ -263,7 +620,7 @@ class AudioConverter: ObservableObject {
             }
         }
     }
-    
+
     private func estimateBitrate(for url: URL) -> Double {
         let asset = AVURLAsset(url: url)
         do {
@@ -279,47 +636,42 @@ class AudioConverter: ObservableObject {
         }
         return 999.0
     }
-    
+
     private func convertToMP3(input: URL, output: URL, bitrate: String) {
-            let process = Process()
-            let fm = FileManager.default
-            
-            var ffmpegPath = "/opt/homebrew/bin/ffmpeg"
-            if !fm.fileExists(atPath: ffmpegPath) {
-                ffmpegPath = "/usr/local/bin/ffmpeg"
-            }
-            
-            if !fm.fileExists(atPath: ffmpegPath) {
-                print("ERROR: FFmpeg not found at \(ffmpegPath).")
-                return
-            }
-            
-            process.executableURL = URL(fileURLWithPath: ffmpegPath)
-            
-            process.arguments = [
-                "-y",
-                "-i", input.path,
-                
-                "-map_metadata", "0",
-                
-                "-codec:a", "libmp3lame",
-                "-b:a", "\(bitrate)k",
-                
-                "-write_id3v1", "1",
-                
-                "-id3v2_version", "3",
-                
-                output.path
-            ]
-            
-            do {
-                try process.run()
-                process.waitUntilExit()
-            } catch {
-                print("Failed to run FFmpeg: \(error.localizedDescription)")
-            }
+        let process = Process()
+        let fm = FileManager.default
+
+        var ffmpegPath = "/opt/homebrew/bin/ffmpeg"
+        if !fm.fileExists(atPath: ffmpegPath) {
+            ffmpegPath = "/usr/local/bin/ffmpeg"
         }
-    
+
+        if !fm.fileExists(atPath: ffmpegPath) {
+            print("ERROR: FFmpeg not found at \(ffmpegPath).")
+            return
+        }
+
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+
+        process.arguments = [
+            "-y",
+            "-i", input.path,
+            "-map_metadata", "0",
+            "-codec:a", "libmp3lame",
+            "-b:a", "\(bitrate)k",
+            "-write_id3v1", "1",
+            "-id3v2_version", "3",
+            output.path
+        ]
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            print("Failed to run FFmpeg: \(error.localizedDescription)")
+        }
+    }
+
     private func updateUI(_ block: @escaping () -> Void) {
         DispatchQueue.main.async {
             block()
