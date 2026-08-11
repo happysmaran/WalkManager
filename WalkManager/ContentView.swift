@@ -151,7 +151,7 @@ struct EmptyStateView: View {
     }
 }
 
-// MARK: - Device Detail (iTunes-style summary)
+// MARK: - Device Details
 
 struct DeviceDetailView: View {
     @ObservedObject var device: ConnectedDevice
@@ -197,7 +197,7 @@ struct DeviceDetailView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        Text("Detected as a removable volume. Vendor/model information is reported by the device itself and may be generic.")
+                        Text("Detected as a removable volume.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -281,8 +281,8 @@ struct DeviceDetailView: View {
                         .animation(.easeInOut(duration: 0.12), value: isOptionHeld)
 
                         Text(isOptionHeld
-                             ? "Release to add new songs only. Overwrite mode will delete and re-write any songs already on the device."
-                             : "Adds new songs only, and never touches existing files on the device. Hold ⌥ Option while clicking to overwrite (delete + re-write) any songs already there.")
+                             ? "Will delete and re-write all songs already on the device."
+                             : "Will only add new songs. Hold ⌥ Option while clicking to fully overwrite all songs on device.")
                             .font(.caption)
                             .foregroundColor(isOptionHeld ? .orange : .secondary)
                             .multilineTextAlignment(.center)
@@ -445,7 +445,7 @@ struct TrackTableView: View {
 
     var body: some View {
         Table(tracks) {
-            TableColumn("Title") { track in
+            TableColumn("Filename") { track in
                 Text(track.title)
             }
             TableColumn("Duration") { track in
@@ -458,7 +458,7 @@ struct TrackTableView: View {
                     .foregroundColor(.secondary)
             }
             .width(90)
-            TableColumn("") { track in
+            TableColumn("X") { track in
                 Button {
                     pendingDeletion = track
                 } label: {
