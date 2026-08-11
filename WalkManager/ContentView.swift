@@ -39,17 +39,6 @@ struct ContentView: View {
                         }
                     }
                 }
-
-                Section("Library") {
-                    Button {
-                        if let picked = selectFolder() {
-                            sourceFolder = picked
-                        }
-                    } label: {
-                        Label(sourceFolder?.lastPathComponent ?? "Choose Music Folder", systemImage: "music.note.folder")
-                    }
-                    .buttonStyle(.plain)
-                }
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 200, ideal: 220)
@@ -73,7 +62,7 @@ struct ContentView: View {
                     bitrates: bitrates,
                     onConvert: {
                         if let src = sourceFolder {
-                            converter.startConversion(source: src, destination: device.mountURL, bitrate: selectedBitrate)
+                            converter.startConversion(source: src, destination: device.effectiveDestinationURL, bitrate: selectedBitrate)
                         }
                     },
                     onPickFolderManually: {
@@ -194,6 +183,21 @@ struct DeviceDetailView: View {
                         }
 
                         HStack {
+                            Label("Destination on Device", systemImage: "arrow.down.doc")
+                            Spacer()
+                            Picker("", selection: Binding(
+                                get: { device.selectedMusicFolder },
+                                set: { device.selectedMusicFolder = $0 }
+                            )) {
+                                Text("Device Root").tag("")
+                                ForEach(device.candidateMusicFolders, id: \.self) { folder in
+                                    Text(folder).tag(folder)
+                                }
+                            }
+                            .frame(width: 220)
+                        }
+
+                        HStack {
                             Label("MP3 Export Quality", systemImage: "waveform")
                             Spacer()
                             Picker("", selection: $selectedBitrate) {
@@ -266,11 +270,14 @@ struct DeviceDetailView: View {
         .onChange(of: converter.isConverting) { _, converting in
             if converting == false { scanExistingTracks() }
         }
+        .onChange(of: device.selectedMusicFolder) { _, _ in
+            scanExistingTracks()
+        }
     }
 
     private func scanExistingTracks() {
         isScanningTracks = true
-        let mountURL = device.mountURL
+        let mountURL = device.effectiveDestinationURL
         DispatchQueue.global(qos: .userInitiated).async {
             let fm = FileManager.default
             var results: [AudioTrackInfo] = []
@@ -395,6 +402,19 @@ final class ConnectedDevice: ObservableObject, Identifiable, Equatable {
     @Published var availableCapacity: Int64
     @Published var isRemovable: Bool
 
+    /// Top-level folders on the device that look like conventional music
+    /// destinations (e.g. "MUSIC", "Music"). Populated by DeviceManager
+    /// when the device is scanned. Always includes an explicit "root" option
+    /// so writing to the volume's top level is a deliberate choice, not a
+    /// silent default.
+    @Published var candidateMusicFolders: [String] = []
+
+    /// The folder (relative to the volume root) that transfers should write
+    /// into. Empty string = device root. Defaults to the first detected
+    /// music-like folder if one exists, otherwise root -- but is always
+    /// shown and editable in the UI rather than assumed silently.
+    @Published var selectedMusicFolder: String = ""
+
     init(id: String, mountURL: URL, volumeName: String, vendor: String?, model: String?,
          totalCapacity: Int64, availableCapacity: Int64, isRemovable: Bool) {
         self.id = id
@@ -411,6 +431,12 @@ final class ConnectedDevice: ObservableObject, Identifiable, Equatable {
 
     var displayName: String {
         volumeName.isEmpty ? (vendor ?? "USB Device") : volumeName
+    }
+
+    /// The actual destination URL transfers should be written to, given the
+    /// currently selected folder (root or a detected/custom subfolder).
+    var effectiveDestinationURL: URL {
+        selectedMusicFolder.isEmpty ? mountURL : mountURL.appendingPathComponent(selectedMusicFolder)
     }
 
     /// NOTE: macOS cannot positively identify a device as an "MP3 player" vs. a plain
@@ -516,18 +542,39 @@ final class DeviceManager: NSObject, ObservableObject {
                 }
             }
 
-            results.append(
-                ConnectedDevice(
-                    id: bsdName,
-                    mountURL: volumeURL,
-                    volumeName: volumeName,
-                    vendor: (vendor?.isEmpty ?? true) ? nil : vendor,
-                    model: (model?.isEmpty ?? true) ? nil : model,
-                    totalCapacity: total,
-                    availableCapacity: available,
-                    isRemovable: isRemovable
-                )
+            let newDevice = ConnectedDevice(
+                id: bsdName,
+                mountURL: volumeURL,
+                volumeName: volumeName,
+                vendor: (vendor?.isEmpty ?? true) ? nil : vendor,
+                model: (model?.isEmpty ?? true) ? nil : model,
+                totalCapacity: total,
+                availableCapacity: available,
+                isRemovable: isRemovable
             )
+
+            // Detect conventional top-level music folders so we don't silently
+            // guess where to write. Devices vary: some want files at the
+            // volume root, some expect a dedicated MUSIC/Music folder, some
+            // use other vendor-specific names -- so we surface whatever
+            // matches and let the user confirm, rather than assuming.
+            let musicFolderHints = ["music", "mp3", "songs", "audio"]
+            if let contents = try? fm.contentsOfDirectory(at: volumeURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+                let matches = contents.filter { url in
+                    let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                    return isDir && musicFolderHints.contains(url.lastPathComponent.lowercased())
+                }.map { $0.lastPathComponent }
+                newDevice.candidateMusicFolders = matches.sorted()
+                // Preserve the user's existing choice on refresh; otherwise
+                // default to the first detected folder, falling back to root.
+                if let previous = self.devices.first(where: { $0.id == bsdName }) {
+                    newDevice.selectedMusicFolder = previous.selectedMusicFolder
+                } else {
+                    newDevice.selectedMusicFolder = matches.first ?? ""
+                }
+            }
+
+            results.append(newDevice)
         }
 
         self.devices = results.sorted { $0.displayName < $1.displayName }
@@ -550,6 +597,20 @@ class AudioConverter: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async {
             let fileManager = FileManager.default
+
+            // Make sure the chosen destination (root or a subfolder like
+            // "MUSIC") actually exists before writing into it.
+            if !fileManager.fileExists(atPath: destination.path) {
+                do {
+                    try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+                } catch {
+                    self.updateUI {
+                        self.statusMessage = "Could not create destination folder: \(error.localizedDescription)"
+                        self.isConverting = false
+                    }
+                    return
+                }
+            }
 
             guard let enumerator = fileManager.enumerator(at: source, includingPropertiesForKeys: nil) else {
                 self.updateUI { self.statusMessage = "Failed to read source folder."; self.isConverting = false }
