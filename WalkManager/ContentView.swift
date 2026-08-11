@@ -62,7 +62,8 @@ struct ContentView: View {
                     bitrates: bitrates,
                     onConvert: {
                         if let src = sourceFolder {
-                            converter.startConversion(source: src, destination: device.effectiveDestinationURL, bitrate: selectedBitrate)
+                            let forceOverwrite = NSEvent.modifierFlags.contains(.option)
+                            converter.startConversion(source: src, destination: device.effectiveDestinationURL, bitrate: selectedBitrate, forceOverwrite: forceOverwrite)
                         }
                     },
                     onPickFolderManually: {
@@ -171,21 +172,20 @@ struct DeviceDetailView: View {
 
                 // MARK: Sync settings
                 GroupBox("Sync Settings") {
-                    Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 14) {
-                        GridRow {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
                             Label("Music Folder", systemImage: "folder")
-                                .gridColumnAlignment(.leading)
-                            HStack(spacing: 8) {
-                                Text(sourceFolder?.path ?? "Not selected")
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Button("Choose...", action: onPickFolderManually)
-                            }
+                            Spacer()
+                            Text(sourceFolder?.path ?? "Not selected")
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("Choose...", action: onPickFolderManually)
                         }
 
-                        GridRow {
+                        HStack {
                             Label("Destination on Device", systemImage: "arrow.down.doc")
+                            Spacer()
                             Picker("", selection: Binding(
                                 get: { device.selectedMusicFolder },
                                 set: { device.selectedMusicFolder = $0 }
@@ -197,15 +197,18 @@ struct DeviceDetailView: View {
                             }
                             .pickerStyle(.menu)
                             .labelsHidden()
+                            .frame(width: 160, alignment: .trailing)
                         }
 
-                        GridRow {
+                        HStack {
                             Label("MP3 Export Quality", systemImage: "waveform")
+                            Spacer()
                             Picker("", selection: $selectedBitrate) {
                                 ForEach(bitrates, id: \.self) { Text("\($0) kbps").tag($0) }
                             }
                             .pickerStyle(.menu)
                             .labelsHidden()
+                            .frame(width: 160, alignment: .trailing)
                         }
                     }
                     .padding(6)
@@ -228,6 +231,11 @@ struct DeviceDetailView: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .disabled(sourceFolder == nil)
+
+                        Text("Adds new songs only, and never touches existing files on the device. Hold ⌥ Option while clicking to overwrite (delete + re-write) any songs already there.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                 }
                 .animation(.easeInOut, value: converter.isConverting)
@@ -260,7 +268,7 @@ struct DeviceDetailView: View {
                             .foregroundColor(.secondary)
                             .padding(.vertical, 8)
                     } else {
-                        TrackTableView(tracks: existingTracks)
+                        TrackTableView(tracks: existingTracks, onDelete: deleteTrack)
                             .frame(minHeight: 220)
                     }
                 }
@@ -269,7 +277,10 @@ struct DeviceDetailView: View {
         }
         .onAppear { scanExistingTracks() }
         .onChange(of: converter.isConverting) { _, converting in
-            if converting == false { scanExistingTracks() }
+            if converting == false {
+                scanExistingTracks()
+                device.refreshCapacity()
+            }
         }
         .onChange(of: device.selectedMusicFolder) { _, _ in
             scanExistingTracks()
@@ -291,6 +302,7 @@ struct DeviceDetailView: View {
                     results.append(
                         AudioTrackInfo(
                             id: fileURL.path,
+                            fileURL: fileURL,
                             title: fileURL.deletingPathExtension().lastPathComponent,
                             durationSeconds: duration.isFinite ? duration : 0,
                             fileSizeBytes: size
@@ -304,6 +316,16 @@ struct DeviceDetailView: View {
                 self.isScanningTracks = false
             }
         }
+    }
+
+    private func deleteTrack(_ track: AudioTrackInfo) {
+        do {
+            try FileManager.default.removeItem(at: track.fileURL)
+        } catch {
+            print("Failed to delete track: \(error.localizedDescription)")
+        }
+        device.refreshCapacity()
+        scanExistingTracks()
     }
 }
 
@@ -355,6 +377,9 @@ struct StorageBarView: View {
 
 struct TrackTableView: View {
     let tracks: [AudioTrackInfo]
+    let onDelete: (AudioTrackInfo) -> Void
+
+    @State private var pendingDeletion: AudioTrackInfo?
 
     var body: some View {
         Table(tracks) {
@@ -371,12 +396,33 @@ struct TrackTableView: View {
                     .foregroundColor(.secondary)
             }
             .width(90)
+            TableColumn("") { track in
+                Button {
+                    pendingDeletion = track
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
+            }
+            .width(30)
+        }
+        .alert(item: $pendingDeletion) { track in
+            Alert(
+                title: Text("Delete \"\(track.title)\" from device?"),
+                message: Text("This permanently removes the file from the device. It does not affect your source library."),
+                primaryButton: .destructive(Text("Delete")) {
+                    onDelete(track)
+                },
+                secondaryButton: .cancel()
+            )
         }
     }
 }
 
 struct AudioTrackInfo: Identifiable {
     let id: String
+    let fileURL: URL
     let title: String
     let durationSeconds: Double
     let fileSizeBytes: Int
@@ -389,6 +435,10 @@ struct AudioTrackInfo: Identifiable {
     var sizeDisplay: String {
         ByteCountFormatter.string(fromByteCount: Int64(fileSizeBytes), countStyle: .file)
     }
+}
+
+extension AudioTrackInfo: Equatable {
+    static func == (lhs: AudioTrackInfo, rhs: AudioTrackInfo) -> Bool { lhs.id == rhs.id }
 }
 
 // MARK: - Connected device model
@@ -438,6 +488,15 @@ final class ConnectedDevice: ObservableObject, Identifiable, Equatable {
     /// currently selected folder (root or a detected/custom subfolder).
     var effectiveDestinationURL: URL {
         selectedMusicFolder.isEmpty ? mountURL : mountURL.appendingPathComponent(selectedMusicFolder)
+    }
+
+    /// Re-reads live capacity from the volume, used after deleting or
+    /// transferring individual files so the storage bar stays accurate
+    /// without waiting for the next full device rescan.
+    func refreshCapacity() {
+        guard let values = try? mountURL.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey]) else { return }
+        if let total = values.volumeTotalCapacity { self.totalCapacity = Int64(total) }
+        if let available = values.volumeAvailableCapacity { self.availableCapacity = Int64(available) }
     }
 
     /// NOTE: macOS cannot positively identify a device as an "MP3 player" vs. a plain
@@ -591,10 +650,10 @@ class AudioConverter: ObservableObject {
 
     let supportedExtensions = ["wav", "flac", "m4a", "aac", "aiff", "ogg", "alac", "mp3", "wma"]
 
-    func startConversion(source: URL, destination: URL, bitrate: String) {
+    func startConversion(source: URL, destination: URL, bitrate: String, forceOverwrite: Bool) {
         isConverting = true
         progress = 0.0
-        statusMessage = "Scanning for audio files..."
+        statusMessage = forceOverwrite ? "Scanning for audio files (overwrite mode)..." : "Scanning for audio files..."
 
         DispatchQueue.global(qos: .userInitiated).async {
             let fileManager = FileManager.default
@@ -638,6 +697,9 @@ class AudioConverter: ObservableObject {
             queue.maxConcurrentOperationCount = ProcessInfo.processInfo.processorCount
 
             var completedCount = 0
+            var transferredCount = 0
+            var skippedCount = 0
+            let progressLock = NSLock()
 
             for file in audioFiles {
                 queue.addOperation {
@@ -645,29 +707,52 @@ class AudioConverter: ObservableObject {
                     let filenameWithoutExtension = file.deletingPathExtension().lastPathComponent
                     let outputURL = destination.appendingPathComponent("\(filenameWithoutExtension).mp3")
 
-                    if fileExtension == "mp3" {
-                        let currentKbps = self.estimateBitrate(for: file)
+                    let alreadyOnDevice = fileManager.fileExists(atPath: outputURL.path)
+                    var wasSkipped = false
 
-                        if currentKbps > (targetKbps + 15.0) {
-                            self.convertToMP3(input: file, output: outputURL, bitrate: bitrate)
-                        } else {
+                    // Default behavior: never touch a file that's already on the
+                    // device -- no re-encode, no re-copy, no delete. Only
+                    // force-overwrite (Option key) actually deletes and re-writes
+                    // an existing file; everything else that's new gets added.
+                    if alreadyOnDevice && !forceOverwrite {
+                        wasSkipped = true
+                    } else {
+                        if alreadyOnDevice && forceOverwrite {
                             do {
-                                if fileManager.fileExists(atPath: outputURL.path) {
-                                    try fileManager.removeItem(at: outputURL)
-                                }
-                                try fileManager.copyItem(at: file, to: outputURL)
+                                try fileManager.removeItem(at: outputURL)
                             } catch {
-                                print("Failed to copy MP3: \(error.localizedDescription)")
+                                print("Failed to remove existing file before overwrite: \(error.localizedDescription)")
                             }
                         }
-                    } else {
-                        self.convertToMP3(input: file, output: outputURL, bitrate: bitrate)
+
+                        if fileExtension == "mp3" {
+                            let currentKbps = self.estimateBitrate(for: file)
+
+                            if currentKbps > (targetKbps + 15.0) {
+                                self.convertToMP3(input: file, output: outputURL, bitrate: bitrate)
+                            } else {
+                                do {
+                                    try fileManager.copyItem(at: file, to: outputURL)
+                                } catch {
+                                    print("Failed to copy MP3: \(error.localizedDescription)")
+                                }
+                            }
+                        } else {
+                            self.convertToMP3(input: file, output: outputURL, bitrate: bitrate)
+                        }
                     }
 
+                    progressLock.lock()
+                    completedCount += 1
+                    if wasSkipped { skippedCount += 1 } else { transferredCount += 1 }
+                    let currentCompleted = completedCount
+                    let currentTransferred = transferredCount
+                    let currentSkipped = skippedCount
+                    progressLock.unlock()
+
                     DispatchQueue.main.async {
-                        completedCount += 1
-                        self.progress = Double(completedCount) / Double(totalFiles)
-                        self.statusMessage = "Processed \(completedCount) of \(totalFiles)"
+                        self.progress = Double(currentCompleted) / Double(totalFiles)
+                        self.statusMessage = "Processed \(currentCompleted) of \(totalFiles) (\(currentTransferred) transferred, \(currentSkipped) already on device)"
                     }
                 }
             }
@@ -675,7 +760,7 @@ class AudioConverter: ObservableObject {
             queue.waitUntilAllOperationsAreFinished()
 
             self.updateUI {
-                self.statusMessage = "Done! Successfully transferred \(totalFiles) files."
+                self.statusMessage = "Done! \(transferredCount) transferred, \(skippedCount) already on device left untouched."
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                     self.isConverting = false
                 }
