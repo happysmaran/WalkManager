@@ -131,7 +131,7 @@ impl WalkManagerApp {
 // ──────────────────────────────────────────────────────────────────────────────
 
 impl eframe::App for WalkManagerApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // ── poll background scan ───────────────────────────────────────────
         if self.is_scanning {
             if let Ok(mut slot) = self.scan_result.try_lock() {
@@ -184,16 +184,16 @@ impl eframe::App for WalkManagerApp {
         }
 
         // ── Ctrl = force-overwrite mode (mirrors macOS ⌥ Option) ──────────
-        ctx.input(|i| self.force_overwrite = i.modifiers.ctrl);
+        ui.ctx().input(|i| self.force_overwrite = i.modifiers.ctrl);
 
         // ── layout ────────────────────────────────────────────────────────
 
         // LEFT SIDEBAR ──────────────────────────────────────────────────────
-        egui::SidePanel::left("sidebar")
-            .min_width(200.0)
-            .max_width(240.0)
+        egui::Panel::left("sidebar")
+            .min_size(200.0)
+            .max_size(240.0)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("DEVICES").small().strong().color(
                     ui.visuals().weak_text_color(),
@@ -222,7 +222,7 @@ impl eframe::App for WalkManagerApp {
             });
 
         // MAIN PANEL ────────────────────────────────────────────────────────
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             if let Some(idx) = self.selected_idx {
                 // Borrowing workaround: pull values we need before mutable borrows.
                 let display_name = self.devices[idx].display_name().to_string();
@@ -572,7 +572,7 @@ impl eframe::App for WalkManagerApp {
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                    .show(ctx, |ui| {
+                    .show(ui.ctx(), |ui| {
                         ui.label(format!("Delete \"{}\" from device?", track_title));
                         ui.add_space(4.0);
                         ui.label(
@@ -617,7 +617,7 @@ impl eframe::App for WalkManagerApp {
         let still_busy = self.is_scanning
             || self.converter_state.lock().unwrap().is_converting;
         if still_busy {
-            ctx.request_repaint_after(Duration::from_millis(120));
+            ui.ctx().request_repaint_after(Duration::from_millis(120));
         }
     }
 }
