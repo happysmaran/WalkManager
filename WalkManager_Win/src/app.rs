@@ -208,15 +208,21 @@ impl eframe::App for WalkManagerApp {
                             .color(ui.visuals().weak_text_color()),
                     );
                 } else {
+                    let mut clicked_index = None;
+
                     for (i, device) in self.devices.iter().enumerate() {
                         let selected = self.selected_idx == Some(i);
                         let label = format!("💾  {}", device.display_name());
                         if ui.selectable_label(selected, &label).clicked() && !selected {
-                            self.selected_idx = Some(i);
-                            self.load_settings(i);
-                            self.trigger_scan(i);
-                            self.last_status.clear();
+                            clicked_index = Some(i);
                         }
+                    }
+
+                    if let Some(i) = clicked_index {
+                        self.selected_idx = Some(i);
+                        self.load_settings(i);
+                        self.trigger_scan(i);
+                        self.last_status.clear();
                     }
                 }
             });
