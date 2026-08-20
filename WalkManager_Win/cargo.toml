@@ -1,0 +1,31 @@
+[package]
+name = "walk-manager-win"
+version = "0.1.0"
+edition = "2021"
+description = "WalkManager – Windows port. Converts and syncs music to USB devices via ffmpeg."
+
+[[bin]]
+name = "walk-manager-win"
+path = "src/main.rs"
+
+[dependencies]
+eframe  = "0.28"
+egui    = "0.28"
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir    = "2"
+dirs       = "5"
+rfd        = "0.14"
+rayon      = "1"
+
+# Windows-only: Win32 API bindings for drive enumeration
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
+
+[profile.release]
+opt-level = 3
+lto       = true
+strip     = true
