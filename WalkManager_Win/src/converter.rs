@@ -2,10 +2,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Public types
-// ──────────────────────────────────────────────────────────────────────────────
-
 const SUPPORTED_EXTENSIONS: &[&str] = &[
     "wav", "flac", "m4a", "aac", "aiff", "ogg", "alac", "mp3", "wma",
 ];
@@ -17,7 +14,7 @@ pub struct ConverterState {
     pub is_converting: bool,
     pub progress: f64,
     pub status_message: String,
-    /// Set to `true` for one tick once a conversion completes so the
+    /// Set to 'true' for one tick once a conversion completes so the
     /// app can trigger a track-list refresh.
     pub just_finished: bool,
 }
@@ -31,11 +28,9 @@ pub struct AudioTrackInfo {
     pub size_display: String,
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Track scanning
-// ──────────────────────────────────────────────────────────────────────────────
 
-/// Scan `destination` for MP3 files.  Duration is read via ffprobe when
+/// Scan 'destination' for MP3 files.  Duration is read via ffprobe when
 /// available; falls back to "—" if ffprobe isn't on PATH.
 pub fn scan_tracks(destination: &Path) -> Vec<AudioTrackInfo> {
     let ffprobe = find_tool("ffprobe");
@@ -106,14 +101,12 @@ fn probe_duration(ffprobe: &Path, audio: &Path) -> Option<String> {
     Some(format!("{}:{:02}", total / 60, total % 60))
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Conversion
-// ──────────────────────────────────────────────────────────────────────────────
 
 /// Spawn a background thread that converts all supported audio files in
-/// `source` to MP3 and copies them into `destination`.
+/// 'source' to MP3 and copies them into 'destination'.
 ///
-/// `state` is updated throughout so the UI can show live progress.
+/// 'state' is updated throughout so the UI can show live progress.
 pub fn start_conversion(
     source: PathBuf,
     destination: PathBuf,
@@ -122,7 +115,7 @@ pub fn start_conversion(
     state: Arc<Mutex<ConverterState>>,
 ) {
     std::thread::spawn(move || {
-        // ── initial state ──────────────────────────────────────────────────
+        // initial state
         {
             let mut s = state.lock().unwrap();
             s.is_converting = true;
@@ -135,7 +128,7 @@ pub fn start_conversion(
             };
         }
 
-        // ── locate ffmpeg ──────────────────────────────────────────────────
+        // find ffmpeg
         let ffmpeg = match find_tool("ffmpeg") {
             Some(p) => p,
             None => {
@@ -147,7 +140,7 @@ pub fn start_conversion(
             }
         };
 
-        // ── ensure destination exists ──────────────────────────────────────
+        // ensure destination exists
         if !destination.exists() {
             if let Err(e) = std::fs::create_dir_all(&destination) {
                 let mut s = state.lock().unwrap();
@@ -157,7 +150,7 @@ pub fn start_conversion(
             }
         }
 
-        // ── collect source files ───────────────────────────────────────────
+        // collect source files
         let audio_files: Vec<PathBuf> = walkdir::WalkDir::new(&source)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -267,9 +260,7 @@ pub fn start_conversion(
     });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Helpers
-// ──────────────────────────────────────────────────────────────────────────────
 
 fn run_ffmpeg(ffmpeg: &Path, input: &Path, output: &Path, bitrate: &str) {
     let _ = std::process::Command::new(ffmpeg)
@@ -292,17 +283,40 @@ fn run_ffmpeg(ffmpeg: &Path, input: &Path, output: &Path, bitrate: &str) {
         .output();
 }
 
-/// Rough bitrate estimate from file size alone (assumes ~3-min average track).
-/// Used only to decide whether an existing MP3 should be re-encoded.
+// Find bitrate (ffprobe or if fails, manual calc)
 fn estimate_bitrate(path: &Path) -> f64 {
+    if let Some(ffprobe) = find_tool("ffprobe") {
+        let out = std::process::Command::new(ffprobe)
+            .args([
+                "-v",
+                "quiet",
+                "-show_entries",
+                "format=bit_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                &path.to_string_lossy(),
+            ])
+            .output();
+
+        if let Ok(output) = out {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout);
+                if let Ok(bps) = s.trim().parse::<f64>() {
+                    if bps > 0.0 {
+                        return bps / 1000.0;
+                    }
+                }
+            }
+        }
+    }
+
+    // fallback
     let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    let assumed_duration = 180.0_f64; // seconds
+    let assumed_duration = 180.0_f64;
     (size_bytes as f64 * 8.0) / assumed_duration / 1000.0
 }
 
-/// Locates `name` (e.g. `"ffmpeg"`) by:
-///   1. Checking next to the running binary (handy for portable installs)
-///   2. Asking `where` (Windows) / `which` (Unix) to search PATH
+/// Locates 'name' (e.g. '"ffmpeg"')
 fn find_tool(name: &str) -> Option<PathBuf> {
     // Next to our own executable
     if let Ok(exe) = std::env::current_exe() {

@@ -11,10 +11,10 @@ pub struct DeviceSyncSettings {
     pub source_folder: Option<String>,
 }
 
-/// Persists a map of `identity_key -> DeviceSyncSettings` as JSON.
+/// Persists a map of 'identity_key -> DeviceSyncSettings' as JSON.
 ///
 /// On Windows the file lives at:
-///   `%LOCALAPPDATA%\WalkManager\device_settings.json`
+///   '%LOCALAPPDATA%\WalkManager\device_settings.json'
 pub struct DeviceSettingsStore {
     path: PathBuf,
     cache: HashMap<String, DeviceSyncSettings>,

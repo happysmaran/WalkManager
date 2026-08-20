@@ -8,9 +8,7 @@ use crate::converter::{self, AudioTrackInfo, ConverterState};
 use crate::device::{self, ConnectedDevice};
 use crate::settings::DeviceSettingsStore;
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Application state
-// ──────────────────────────────────────────────────────────────────────────────
 
 pub struct WalkManagerApp {
     // Device sidebar
@@ -76,7 +74,7 @@ impl WalkManagerApp {
         app
     }
 
-    // ── settings helpers ───────────────────────────────────────────────────
+    // settings helpers
 
     fn load_settings(&mut self, idx: usize) {
         let key = self.devices[idx].identity_key();
@@ -108,7 +106,7 @@ impl WalkManagerApp {
             .save(&key, &self.selected_bitrate, &sub, sf.as_deref());
     }
 
-    // ── background track scan ──────────────────────────────────────────────
+    // track scanning
 
     fn trigger_scan(&mut self, idx: usize) {
         self.is_scanning = true;
@@ -119,20 +117,19 @@ impl WalkManagerApp {
         });
     }
 
-    // ── formatting ─────────────────────────────────────────────────────────
+    // formatting
+    // rust is surprisingly direct with syntax
 
     fn fmt_bytes(bytes: u64) -> String {
         converter::format_bytes(bytes)
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// eframe::App  (called every frame)
-// ──────────────────────────────────────────────────────────────────────────────
+// eframe::App
 
 impl eframe::App for WalkManagerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // ── poll background scan ───────────────────────────────────────────
+        // background scan
         if self.is_scanning {
             if let Ok(mut slot) = self.scan_result.try_lock() {
                 if let Some(tracks) = slot.take() {
@@ -142,7 +139,7 @@ impl eframe::App for WalkManagerApp {
             }
         }
 
-        // ── poll converter "just finished" signal ──────────────────────────
+        // converter "finished" signal
         {
             let mut cs = self.converter_state.lock().unwrap();
             if cs.just_finished {
@@ -157,7 +154,7 @@ impl eframe::App for WalkManagerApp {
             }
         }
 
-        // ── periodic device list refresh ───────────────────────────────────
+        // periodic device list refresh
         if self.last_device_scan.elapsed() >= Duration::from_secs(DEVICE_POLL_SECS) {
             self.last_device_scan = Instant::now();
             let prev_id = self
@@ -183,12 +180,11 @@ impl eframe::App for WalkManagerApp {
                 });
         }
 
-        // ── Ctrl = force-overwrite mode (mirrors macOS ⌥ Option) ──────────
+        // Ctrl = force-overwrite mode
         ui.ctx().input(|i| self.force_overwrite = i.modifiers.ctrl);
 
-        // ── layout ────────────────────────────────────────────────────────
-
-        // LEFT SIDEBAR ──────────────────────────────────────────────────────
+        // LAYOUT
+        // LEFT SIDEBAR
         egui::Panel::left("sidebar")
             .min_size(200.0)
             .max_size(240.0)
@@ -227,7 +223,7 @@ impl eframe::App for WalkManagerApp {
                 }
             });
 
-        // MAIN PANEL ────────────────────────────────────────────────────────
+        // MAIN PANEL
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(idx) = self.selected_idx {
                 // Borrowing workaround: pull values we need before mutable borrows.
@@ -244,7 +240,7 @@ impl eframe::App for WalkManagerApp {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_space(8.0);
 
-                    // ── Device header card ─────────────────────────────────
+                    // Device header card
                     egui::Frame::group(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("💾").size(38.0));
@@ -261,7 +257,7 @@ impl eframe::App for WalkManagerApp {
 
                     ui.add_space(10.0);
 
-                    // ── Storage bar ────────────────────────────────────────
+                    // Storage bar
                     egui::Frame::group(ui.style()).show(ui, |ui| {
                         let bar_h = 16.0;
                         let avail_w = ui.available_width() - ui.spacing().item_spacing.x * 2.0;
@@ -311,7 +307,7 @@ impl eframe::App for WalkManagerApp {
                     ui.separator();
                     ui.add_space(6.0);
 
-                    // ── Sync settings ──────────────────────────────────────
+                    // Sync settings
                     ui.label(egui::RichText::new("Sync Settings").strong());
                     ui.add_space(4.0);
 
@@ -344,8 +340,6 @@ impl eframe::App for WalkManagerApp {
                         // Destination subfolder on device
                         ui.horizontal(|ui| {
                             ui.label("📥  Destination on Device:");
-                            // We can't borrow self.devices[idx] mutably while
-                            // self is borrowed for the closure, so clone first.
                             let candidates = self.devices[idx].candidate_music_folders.clone();
                             let mut sel = self.devices[idx].selected_music_folder.clone();
 
@@ -391,7 +385,7 @@ impl eframe::App for WalkManagerApp {
 
                     ui.add_space(10.0);
 
-                    // ── Convert / progress ─────────────────────────────────
+                    // Convert / progress
                     {
                         let cs = self.converter_state.lock().unwrap();
                         let converting = cs.is_converting;
@@ -467,7 +461,7 @@ impl eframe::App for WalkManagerApp {
                     ui.separator();
                     ui.add_space(6.0);
 
-                    // ── On-device track list ───────────────────────────────
+                    // On-device track list
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Songs on Device").strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -566,7 +560,7 @@ impl eframe::App for WalkManagerApp {
             }
         });
 
-        // ── Delete-confirmation modal ───────────────────────────────────────
+        // Delete-confirmation modal
         if let Some(del_idx) = self.pending_delete_idx {
             if del_idx < self.tracks.len() {
                 let track_title = self.tracks[del_idx].title.clone();
@@ -619,7 +613,7 @@ impl eframe::App for WalkManagerApp {
             }
         }
 
-        // ── Keep repainting while work is in progress ──────────────────────
+        // Keep repainting while work is in progress
         let still_busy = self.is_scanning
             || self.converter_state.lock().unwrap().is_converting;
         if still_busy {

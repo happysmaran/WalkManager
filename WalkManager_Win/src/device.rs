@@ -1,20 +1,20 @@
 use std::path::PathBuf;
 
-/// A removable USB drive visible to the OS.
+// A removable USB drive visible to the OS.
 #[derive(Debug, Clone)]
 pub struct ConnectedDevice {
-    /// Drive letter identifier, e.g. `"E:"`.  Stable for the current mount.
+    // Drive letter identifier, e.g. '"E:"'.  Stable for the current mount.
     pub id: String,
-    /// Root path of the mount, e.g. `"E:\\"`.
+    // Root path of the mount, e.g. '"E:\\"'.
     pub mount_path: PathBuf,
-    /// Volume label reported by the device, e.g. `"WALKMAN"`.
+    // Volume label reported by the device, e.g. '"WALKMAN"'.
     pub volume_name: String,
     pub total_capacity: u64,
     pub available_capacity: u64,
-    /// Top-level subdirectories that look like music destinations
-    /// (e.g. `"MUSIC"`, `"Mp3"`).  Empty vec = only root is offered.
+    // Top-level subdirectories that look like music destinations
+    // (e.g. '"MUSIC"', '"Mp3"').  Empty vec = only root is offered.
     pub candidate_music_folders: Vec<String>,
-    /// Which of the above is currently selected.  Empty = device root.
+    // Which of the above is currently selected.  Empty = device root.
     pub selected_music_folder: String,
 }
 
@@ -31,7 +31,7 @@ impl ConnectedDevice {
         self.total_capacity.saturating_sub(self.available_capacity)
     }
 
-    /// Actual filesystem path that transfers should write into.
+    // Actual filesystem path that transfers should write into.
     pub fn effective_destination(&self) -> PathBuf {
         if self.selected_music_folder.is_empty() {
             self.mount_path.clone()
@@ -40,13 +40,13 @@ impl ConnectedDevice {
         }
     }
 
-    /// Stable key used to persist per-device settings.
-    /// Keyed on volume name + drive letter (best we can do for generic USB storage).
+    // Stable key used to persist per-device settings.
+    // Keyed on volume name + drive letter (best we can do for generic USB storage).
     pub fn identity_key(&self) -> String {
         format!("{}|{}", self.volume_name, self.id).to_lowercase()
     }
 
-    /// Re-reads capacity from the OS; call after a transfer or deletion.
+    // Re-reads capacity from the OS; call after a transfer or deletion.
     pub fn refresh_capacity(&mut self) {
         if let Some((total, available)) = disk_space(&self.mount_path) {
             self.total_capacity = total;
@@ -55,13 +55,9 @@ impl ConnectedDevice {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Public entry point
-// ──────────────────────────────────────────────────────────────────────────────
 
-/// Returns all currently-mounted removable drives.
-/// On non-Windows builds this always returns an empty vec (the Swift build
-/// handles macOS device discovery via DiskArbitration).
+// Returns all currently-mounted removable drives.
 pub fn enumerate_removable_drives() -> Vec<ConnectedDevice> {
     #[cfg(windows)]
     return enumerate_windows();
@@ -70,9 +66,8 @@ pub fn enumerate_removable_drives() -> Vec<ConnectedDevice> {
     Vec::new()
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Windows implementation
-// ──────────────────────────────────────────────────────────────────────────────
+// macOS implementation was done first directly with Swift
 
 #[cfg(windows)]
 const DRIVE_REMOVABLE: u32 = 2;
@@ -151,11 +146,9 @@ fn enumerate_windows() -> Vec<ConnectedDevice> {
     devices
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
 // Helpers
-// ──────────────────────────────────────────────────────────────────────────────
 
-/// Returns `(total_bytes, available_bytes)` for the given path, or `None` on error.
+// Returns '(total_bytes, available_bytes)' for the given path, or 'None' on error.
 fn disk_space(path: &PathBuf) -> Option<(u64, u64)> {
     #[cfg(windows)]
     {
@@ -185,8 +178,7 @@ fn disk_space(path: &PathBuf) -> Option<(u64, u64)> {
     None
 }
 
-/// Finds top-level directories on `root` whose names match conventional music
-/// folder names (case-insensitive).  Mirrors the same logic in the Swift build.
+// Finds top-level directories on 'root' whose names match conventional music
 fn scan_music_folders(root: &PathBuf) -> Vec<String> {
     const HINTS: &[&str] = &["music", "mp3", "songs", "audio", "musik"];
 
