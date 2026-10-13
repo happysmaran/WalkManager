@@ -80,4 +80,4 @@ WalkManager/
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [GNU v3.0 License](LICENSE).
